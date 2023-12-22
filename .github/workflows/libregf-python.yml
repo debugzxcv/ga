@@ -1,0 +1,87 @@
+name: "libregf-python build wheels"
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        required: true
+        default: 'libyal/libregf'
+      ref:
+        required: true
+        default: 'main'
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repo }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+
+      - name: Prepare build for Windows
+        if: runner.os == 'Windows'
+        run: |
+            powershell ./synclibs.ps1
+            powershell ./autogen.ps1
+            $ac = get-content configure.ac
+            [Regex]::Matches($ac, 'AC_INIT\s*\([\s\w_\[\]]+,\s*\[(?<version>[a-zA-Z0-9_]+)\],')[0].groups["version"] | set-content VERSION
+            $pyproject = '
+              [project]
+              name = "libregf-python"
+              dynamic = ["version"]
+              description = "Python bindings module for libregf"
+              requires-python = ">=3.7"
+              authors = [
+                {name = "Joachim Metz", email = "joachim.metz@gmail.com"},
+              ]
+              license = {file = "COPYING.LESSER"}
+              classifiers = [
+                "Development Status :: 3 - Alpha",
+                "Programming Language :: Python",
+              ]
+              readme = {file = "README", content-type = "text/markdown"}
+
+              [project.urls]
+              Documentation = "https://github.com/libyal/libregf/wiki/Home"
+              Repository = "https://github.com/libyal/libregf.git"
+              "Bug Tracker" = "https://github.com/libyal/libregf/issues"
+              Changelog = "https://github.com/libyal/libregf/blob/main/ChangeLog"
+
+              [build-system]
+              requires = ["setuptools", "wheel"]
+              build-backend = "setuptools.build_meta"
+
+              [tool.setuptools]
+              py-modules = []
+
+              [tool.setuptools.dynamic]
+              version = {file = "VERSION"}
+            '
+            $pyproject | set-content pyproject.toml
+
+      - name: Prepare build for Linux
+        if: runner.os == 'Linux'
+        run: |
+            sudo add-apt-repository universe &&
+            sudo add-apt-repository -y ppa:deadsnakes/ppa &&
+            sudo apt-get update &&
+            sudo apt-get install -y autoconf automake autopoint build-essential libtool pkg-config
+            ./synclibs.sh --use-head && ./autogen.sh && ./configure && make sources >/dev/null
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.16.2
+        # to supply options, put them in 'env', like:
+        env:
+          CIBW_SKIP: cp36-* cp37-* pp*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
